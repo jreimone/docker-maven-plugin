@@ -21,6 +21,8 @@
 
 package com.spotify.docker;
 
+import java.io.IOException;
+
 import com.spotify.docker.client.DefaultDockerClient;
 import com.spotify.docker.client.DockerCertificateException;
 import com.spotify.docker.client.DockerClient;
@@ -30,6 +32,7 @@ import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.plugin.logging.Log;
 import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.Parameter;
 import org.apache.maven.settings.Server;
@@ -43,187 +46,227 @@ import static com.spotify.docker.client.DefaultDockerClient.NO_TIMEOUT;
 
 abstract class AbstractDockerMojo extends AbstractMojo {
 
-  @Component(role = MavenSession.class)
-  protected MavenSession session;
+    @Component(role = MavenSession.class)
+    protected MavenSession session;
 
-  @Component(role = MojoExecution.class)
-  protected MojoExecution execution;
+    @Component(role = MojoExecution.class)
+    protected MojoExecution execution;
 
-  /**
-   * The system settings for Maven. This is the instance resulting from
-   * merging global and user-level settings files.
-   */
-  @Component
-  private Settings settings;
+    /**
+     * The system settings for Maven. This is the instance resulting from
+     * merging global and user-level settings files.
+     */
+    @Component
+    private Settings settings;
 
-  /**
-   * https://issues.apache.org/jira/browse/MNG-4384
-   */
-  @Component(role = SecDispatcher.class, hint = "mng-4384")
-  private SecDispatcher secDispatcher;
+    /**
+     * https://issues.apache.org/jira/browse/MNG-4384
+     */
+    @Component(role = SecDispatcher.class, hint = "mng-4384")
+    private SecDispatcher secDispatcher;
 
-  /**
-   * URL of the docker host as specified in pom.xml.
-   */
-  @Parameter(property = "dockerHost")
-  private String dockerHost;
+    /**
+     * URL of the docker host as specified in pom.xml.
+     */
+    @Parameter(property = "dockerHost")
+    private String dockerHost;
 
-  @Parameter(property = "serverId")
-  private String serverId;
+    @Parameter(property = "serverId")
+    private String serverId;
 
-  @Parameter(property = "registryUrl")
-  private String registryUrl;
+    @Parameter(property = "registryUrl")
+    private String registryUrl;
 
-  /**
-   * Number of retries for failing pushes, defaults to 5.
-   */
-  @Parameter(property = "retryPushCount", defaultValue = "5")
-  private int retryPushCount;
+    /**
+     * Number of retries for failing pushes, defaults to 5.
+     */
+    @Parameter(property = "retryPushCount", defaultValue = "5")
+    private int retryPushCount;
 
-  /**
-   * Retry timeout for failing pushes, defaults to 10 seconds.
-   */
-  @Parameter(property = "retryPushTimeout", defaultValue = "10000")
-  private int retryPushTimeout;
+    /**
+     * Retry timeout for failing pushes, defaults to 10 seconds.
+     */
+    @Parameter(property = "retryPushTimeout", defaultValue = "10000")
+    private int retryPushTimeout;
 
-  public int getRetryPushTimeout() {
-    return retryPushTimeout;
-  }
-
-  public int getRetryPushCount() {
-    return retryPushCount;
-  };
-
-  public void execute() throws MojoExecutionException {
-    DockerClient client = null;
-    try {
-      final DefaultDockerClient.Builder builder = getBuilder();
-
-      final String dockerHost = rawDockerHost();
-      if (!isNullOrEmpty(dockerHost)) {
-        builder.uri(dockerHost);
-      }
-
-      final AuthConfig authConfig = authConfig();
-      if (authConfig != null) {
-        builder.authConfig(authConfig);
-      }
-
-      client = builder.build();
-      execute(client);
-    } catch (Exception e) {
-      throw new MojoExecutionException("Exception caught", e);
-    } finally {
-      if (client != null) {
-        client.close();
-      }
-    }
-  }
-
-  protected DefaultDockerClient.Builder getBuilder() throws DockerCertificateException {
-    return DefaultDockerClient.fromEnv()
-      .readTimeoutMillis(NO_TIMEOUT);
-  }
-
-  protected abstract void execute(final DockerClient dockerClient) throws Exception;
-
-  protected String rawDockerHost() {
-    return dockerHost;
-  }
-
-  /**
-   * Get the email from the server configuration in <code>~/.m2/settings.xml</code>.
-   *
-   * <pre>
-   * <servers>
-   *   <server>
-   *     <id>my-private-docker-registry</id>
-   *     [...]
-   *     <configuration>
-   *       <email>foo@bar.com</email>
-   *     </configuration>
-   *   </server>
-   * </servers>
-   * </pre>
-   *
-   * The above <code>settings.xml</code> would return "foo@bar.com".
-   *
-   * @param server {@link org.apache.maven.settings.Server}
-   * @return email string.
-   */
-  private String getEmail(final Server server) {
-    String email = null;
-
-    final Xpp3Dom configuration = (Xpp3Dom) server.getConfiguration();
-
-    if (configuration != null) {
-      final Xpp3Dom emailNode = configuration.getChild("email");
-
-      if (emailNode != null) {
-        email = emailNode.getValue();
-      }
+    public int getRetryPushTimeout() {
+        return retryPushTimeout;
     }
 
-    return email;
-  }
+    public int getRetryPushCount() {
+        return retryPushCount;
+    };
 
-  /**
-   * Checks for incomplete private Docker registry authorization settings.
-   * @param username Auth username.
-   * @param password Auth password.
-   * @param email    Auth email.
-   * @return boolean true if any of the three credentials are present but not all. False otherwise.
-   */
-  private boolean incompleteAuthSettings(final String username, final String password,
-                                         final String email) {
-    return (!isNullOrEmpty(username) || !isNullOrEmpty(password) || !isNullOrEmpty(email))
-           && (isNullOrEmpty(username) || isNullOrEmpty(password) || isNullOrEmpty(email));
+    public void execute() throws MojoExecutionException {
+        DockerClient client = null;
+        try {
+            final DefaultDockerClient.Builder builder = getBuilder();
 
-  }
+            final String dockerHost = rawDockerHost();
+            if (!isNullOrEmpty(dockerHost)) {
+                builder.uri(dockerHost);
+            }
 
-  /**
-   * Builds the AuthConfig object from server details.
-   * @return AuthConfig
-   * @throws MojoExecutionException
-   * @throws SecDispatcherException
-   */
-  protected AuthConfig authConfig() throws MojoExecutionException, SecDispatcherException {
-    if (settings != null) {
-      final Server server = settings.getServer(serverId);
-      if (server != null) {
-        final AuthConfig.Builder authConfigBuilder = AuthConfig.builder();
+            final AuthConfig authConfig = authConfig();
+            if (authConfig != null) {
+                builder.authConfig(authConfig);
+            }
 
-        final String username = server.getUsername();
-        String password = server.getPassword();
-        if (secDispatcher != null) {
-          password = secDispatcher.decrypt(password);
+            client = builder.build();
+            execute(client);
+        } catch (Exception e) {
+            throw new MojoExecutionException("Exception caught", e);
+        } finally {
+            if (client != null) {
+                client.close();
+            }
         }
-        final String email = getEmail(server);
+    }
 
-        if (incompleteAuthSettings(username, password, email)) {
-          throw new MojoExecutionException(
-                  "Incomplete Docker registry authorization credentials. "
-                          + "Please provide all of username, password, and email or none.");
+    protected DefaultDockerClient.Builder getBuilder()
+            throws DockerCertificateException {
+        return DefaultDockerClient.fromEnv().readTimeoutMillis(NO_TIMEOUT);
+    }
+
+    protected abstract void execute(final DockerClient dockerClient)
+            throws Exception;
+
+    protected String rawDockerHost() {
+        return dockerHost;
+    }
+
+    /**
+     * Get the email from the server configuration in
+     * <code>~/.m2/settings.xml</code>.
+     *
+     * <pre>
+     * <servers>
+     *   <server>
+     *     <id>my-private-docker-registry</id>
+     *     [...]
+     *     <configuration>
+     *       <email>foo@bar.com</email>
+     *     </configuration>
+     *   </server>
+     * </servers>
+     * </pre>
+     *
+     * The above <code>settings.xml</code> would return "foo@bar.com".
+     *
+     * @param server
+     *            {@link org.apache.maven.settings.Server}
+     * @return email string.
+     */
+    private String getEmail(final Server server) {
+        String email = null;
+
+        final Xpp3Dom configuration = (Xpp3Dom) server.getConfiguration();
+
+        if (configuration != null) {
+            final Xpp3Dom emailNode = configuration.getChild("email");
+
+            if (emailNode != null) {
+                email = emailNode.getValue();
+            }
         }
 
-        if (!isNullOrEmpty(username)) {
-          authConfigBuilder.username(username);
+        return email;
+    }
+
+    /**
+     * Checks for incomplete private Docker registry authorization settings.
+     * 
+     * @param username
+     *            Auth username.
+     * @param password
+     *            Auth password.
+     * @param email
+     *            Auth email.
+     * @return boolean true if any of the three credentials are present but not
+     *         all. False otherwise.
+     */
+    private boolean incompleteAuthSettings(final String username,
+            final String password, final String email) {
+        return (!isNullOrEmpty(username) || !isNullOrEmpty(password) || !isNullOrEmpty(email))
+                && (isNullOrEmpty(username) || isNullOrEmpty(password) || isNullOrEmpty(email));
+
+    }
+
+    /**
+     * Builds the AuthConfig object from server details.
+     * 
+     * @return AuthConfig
+     * @throws MojoExecutionException
+     * @throws SecDispatcherException
+     */
+    protected AuthConfig authConfig() throws MojoExecutionException,
+            SecDispatcherException {
+        AuthConfig authConfig = getAuthConfigFromMavenConfig();
+        if (authConfig != null) {
+            return authConfig;
         }
-        if (!isNullOrEmpty(email)) {
-          authConfigBuilder.email(email);
-        }
-        if (!isNullOrEmpty(password)) {
-          authConfigBuilder.password(password);
-        }
-        // registryUrl is optional.
-        // Spotify's docker-client defaults to 'https://index.docker.io/v1/'.
+
+        return getAuthConfigFromDockerConfig();
+    }
+
+    private AuthConfig getAuthConfigFromDockerConfig() {
+        Log log = getLog();
         if (!isNullOrEmpty(registryUrl)) {
-          authConfigBuilder.serverAddress(registryUrl);
+            AuthConfig.Builder authConfigBuilder;
+            try {
+                authConfigBuilder = AuthConfig.fromDockerConfig(registryUrl);
+                if (authConfigBuilder != null) {
+                    log.info("Authentication for '" + registryUrl + "' found in docker config "
+                            + "(usually ~/docker/config.json)");
+                    return authConfigBuilder.build();
+                }
+            } catch (IOException e) {
+                log.error(e);
+            }
         }
-
-        return authConfigBuilder.build();
-      }
+        return null;
     }
-    return null;
-  }
+
+    private AuthConfig getAuthConfigFromMavenConfig()
+            throws SecDispatcherException, MojoExecutionException {
+        if (settings != null) {
+            final Server server = settings.getServer(serverId);
+            if (server != null) {
+                final AuthConfig.Builder authConfigBuilder = AuthConfig
+                        .builder();
+
+                final String username = server.getUsername();
+                String password = server.getPassword();
+                if (secDispatcher != null) {
+                    password = secDispatcher.decrypt(password);
+                }
+                final String email = getEmail(server);
+
+                if (incompleteAuthSettings(username, password, email)) {
+                    throw new MojoExecutionException(
+                            "Incomplete Docker registry authorization credentials. "
+                            + "Please provide all of username, password, and email or none.");
+                }
+
+                if (!isNullOrEmpty(username)) {
+                    authConfigBuilder.username(username);
+                }
+                if (!isNullOrEmpty(email)) {
+                    authConfigBuilder.email(email);
+                }
+                if (!isNullOrEmpty(password)) {
+                    authConfigBuilder.password(password);
+                }
+                // registryUrl is optional.
+                // Spotify's docker-client defaults to
+                // 'https://index.docker.io/v1/'.
+                if (!isNullOrEmpty(registryUrl)) {
+                    authConfigBuilder.serverAddress(registryUrl);
+                }
+
+                return authConfigBuilder.build();
+            }
+        }
+        return null;
+    }
 }
